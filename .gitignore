@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Checkpoints — keep model weights, ignore generated artifacts
+checkpoints/*.npy
+checkpoints/*.png
+checkpoints/*.json
+checkpoints/animations/
+!checkpoints/*.pt
+
+# Notebooks checkpoint dir (stray outputs from notebook runs)
+notebooks/checkpoints/
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

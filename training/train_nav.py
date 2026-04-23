@@ -1,8 +1,8 @@
 """
 Stage 1 — Navigation Training
-4-level curriculum (all PPO):
-  L1  PPO   5×5 plain grid
-  L2  PPO   10×10 plain grid     (warm-starts from L1 weights)
+4-level curriculum:
+  L1  DQN   5×5 plain grid
+  L2  DQN   10×10 plain grid     (warm-starts from L1 weights)
   L3  PPO   10×10 + 10 static obstacles + low-battery starts
   L4  PPO   10×10 + 5 static + 3 dynamic obstacles
 
@@ -51,7 +51,7 @@ def train_dqn(level: int, episodes: int = 8000, pretrained=None,
     WARMUP    = 3000
     LR        = 5e-4
     EPS_DECAY = 0.9995
-    EPS_MIN   = 0.10
+    EPS_MIN   = 0.02
 
     env    = WarehouseEnv(level=level)
     online = DQN(state_dim=13, action_dim=6).to(DEVICE)
@@ -219,29 +219,24 @@ def main():
 
     all_rewards = {}
 
-    # ── Level 1: PPO 5×5 ─────────────────────────────────────────────────
-    print("\n[L1] PPO  5×5 plain grid  (8 000 episodes)")
-    ppo_l1 = PPO(state_dim=13, action_dim=6).to(DEVICE)
-    ppo_l1, r1, s1 = train_ppo(level=1, model=ppo_l1, episodes=8_000,
-                                lr=5e-4, entropy_coef=0.05)
+    # ── Level 1: DQN 5×5 ─────────────────────────────────────────────────
+    print("\n[L1] DQN  5×5 plain grid  (8 000 episodes)")
+    dqn_l1, r1, s1 = train_dqn(level=1, episodes=8_000)
     all_rewards[1] = r1
-    torch.save(ppo_l1.state_dict(), os.path.join(CKPT_DIR, "ppo_l1.pt"))
+    torch.save(dqn_l1.state_dict(), os.path.join(CKPT_DIR, "dqn_l1.pt"))
     plot_nav_history(r1, s1, level=1, out_dir=CKPT_DIR)
 
-    # ── Level 2: PPO 10×10 (warm-start from L1) ──────────────────────────
-    print("\n[L2] PPO  10×10 plain grid  (8 000 episodes)")
-    ppo_l2 = PPO(state_dim=13, action_dim=6).to(DEVICE)
-    ppo_l2.load_state_dict(ppo_l1.state_dict())
-    ppo_l2, r2, s2 = train_ppo(level=2, model=ppo_l2, episodes=8_000,
-                                lr=3e-4, entropy_coef=0.03)
+    # ── Level 2: DQN 10×10 (warm-start from L1) ──────────────────────────
+    print("\n[L2] DQN  10×10 plain grid  (8 000 episodes)")
+    dqn_l2, r2, s2 = train_dqn(level=2, episodes=8_000, pretrained=dqn_l1)
     all_rewards[2] = r2
-    torch.save(ppo_l2.state_dict(), os.path.join(CKPT_DIR, "ppo_l2.pt"))
+    torch.save(dqn_l2.state_dict(), os.path.join(CKPT_DIR, "dqn_l2.pt"))
     plot_nav_history(r2, s2, level=2, out_dir=CKPT_DIR)
 
     # ── Level 3: PPO 10×10 + static obstacles ────────────────────────────
     print("\n[L3] PPO  10×10 + static obstacles  (20 000 episodes)")
     ppo_l3 = PPO(state_dim=13, action_dim=6).to(DEVICE)
-    ppo_l3.load_state_dict(ppo_l2.state_dict())
+    transfer_dqn_to_ppo(dqn_l2, ppo_l3)
     ppo_l3, r3, s3 = train_ppo(level=3, model=ppo_l3, episodes=20_000,
                                 lr=1e-4, entropy_coef=0.03)
     all_rewards[3] = r3

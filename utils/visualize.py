@@ -842,17 +842,17 @@ def build_scenario_catalog(ckpt_dir: str, device) -> dict:
                   record=lambda: record_nav_episode(
                       None, 1, device, untrained=True, seed=7))
 
-    cat[2] = dict(title="Nav success — trained PPO (5×5)",
-                  desc="PPO policy on 5×5 grid. Direct path to goal with clean trajectory.",
+    cat[2] = dict(title="Nav success — trained DQN (5×5)",
+                  desc="DQN policy on 5×5 grid. Direct path to goal with clean trajectory.",
                   out="s02_nav_success_5x5.html",
                   record=lambda: record_nav_episode(
-                      _load_nav_ppo(ckpt_dir, device, "ppo_l3.pt"), 1, device, seed=0))
+                      _load_nav_dqn(ckpt_dir, device, 1), 1, device, seed=0))
 
     cat[3] = dict(title="Nav success — 10×10 grid, no obstacles",
-                  desc="PPO on 10×10 plain grid. Efficient path with battery intact.",
+                  desc="DQN on 10×10 plain grid. Efficient path with battery intact.",
                   out="s03_nav_success_10x10.html",
                   record=lambda: record_nav_episode(
-                      _load_nav_ppo(ckpt_dir, device, "ppo_l3.pt"), 2, device, seed=0))
+                      _load_nav_dqn(ckpt_dir, device, 2), 2, device, seed=0))
 
     cat[4] = dict(title="Nav success — 10×10 with stationary obstacles",
                   desc="PPO routes around static obstacles to goal.",

@@ -140,13 +140,16 @@ class WarehouseStage2:
     # ------------------------------------------------------------------
     def execute_order(self, nav_model: torch.nn.Module, pickup: tuple,
                       other_positions: frozenset = frozenset()) -> float:
-        """Navigate pos → pickup → dropoff. Returns +100 / -80 / -10."""
+        """Navigate pos → pickup → dropoff → wait cell. Returns +100 / -80 / -10."""
         _, reached = self._navigate(nav_model, pickup, other_positions)
         if not reached:
             return -80.0 if self.battery <= 0 else -10.0
         _, reached = self._navigate(nav_model, DROPOFF, other_positions)
         if not reached:
             return -80.0 if self.battery <= 0 else -10.0
+        # Reposition away from DROPOFF so it stays free for the next winner
+        wait_pos = min(WAIT_POSITIONS, key=lambda p: bfs_dist(self.pos, p))
+        self._navigate(nav_model, wait_pos, other_positions)
         return 100.0
 
     def execute_decline_idle(self) -> float:

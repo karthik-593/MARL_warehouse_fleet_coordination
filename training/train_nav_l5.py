@@ -25,7 +25,7 @@ CKPT_DIR   = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                            "checkpoints")
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-EPISODES      = 15_000
+EPISODES      = 30_000
 N_ROLLOUT     = 32
 CLIP_EPS      = 0.2
 PPO_EPOCHS    = 4
@@ -33,7 +33,7 @@ GAMMA         = 0.99
 LR            = 3e-5
 ENTROPY_COEF  = 0.02
 VERBOSE_EVERY = 1_000
-MIX_WAREHOUSE = 0.70
+MIX_WAREHOUSE = 1.00   # 100% warehouse — fix shelf navigation
 
 random.seed(SEED)
 np.random.seed(SEED)

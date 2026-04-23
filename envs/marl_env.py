@@ -34,7 +34,7 @@ import random
 import torch
 
 from envs.assign_env import (
-    WarehouseStage2, PICKUP_POINTS, bfs_dist, TRIP_COST_RATE
+    WarehouseStage2, PICKUP_POINTS, FREE_CELLS, bfs_dist, TRIP_COST_RATE
 )
 
 N_AGENTS  = 3
@@ -72,8 +72,10 @@ class MultiAgentWarehouse:
     # Reset
     # ------------------------------------------------------------------
     def reset(self):
-        for agent in self.agents:
+        positions = random.sample(FREE_CELLS, N_AGENTS)
+        for agent, pos in zip(self.agents, positions):
             agent.reset()
+            agent.pos = pos          # guarantee distinct starting cells
         self.orders  = [random.choice(PICKUP_POINTS) for _ in range(N_ORDERS)]
         self.order_i = 0
         return self._obs_and_gs()
@@ -118,17 +120,23 @@ class MultiAgentWarehouse:
             winner = max(scores, key=scores.get)
 
         # ── Execute each robot's action ────────────────────────────────
-        for i, agent in enumerate(self.agents):
+        # Winner moves first (right of way); subsequent robots see updated positions.
+        order = ([winner] if winner is not None else []) + [
+            i for i in range(N_AGENTS) if i != winner
+        ]
+        for i in order:
+            agent  = self.agents[i]
             action = actions[i]
+            others = frozenset(self.agents[j].pos for j in range(N_AGENTS) if j != i)
 
-            if i == winner:                         # won the bid → execute order
-                rewards[i] = agent.execute_order(nav_model, pickup)
+            if i == winner:
+                rewards[i] = agent.execute_order(nav_model, pickup, others)
                 agent.idle_time = 0
 
-            elif action == 2:                       # chose GoCharge (any robot)
-                rewards[i] = agent.execute_go_charge(nav_model)
+            elif action == 2:
+                rewards[i] = agent.execute_go_charge(nav_model, others)
 
-            else:                                   # Idle, lost bid, or non-eligible Accept
+            else:
                 rewards[i] = agent.execute_decline_idle()
 
         self.order_i += 1

@@ -138,12 +138,13 @@ class WarehouseStage2:
     # ------------------------------------------------------------------
     # Action execution
     # ------------------------------------------------------------------
-    def execute_order(self, nav_model: torch.nn.Module, pickup: tuple) -> float:
+    def execute_order(self, nav_model: torch.nn.Module, pickup: tuple,
+                      other_positions: frozenset = frozenset()) -> float:
         """Navigate pos → pickup → dropoff. Returns +100 / -80 / -10."""
-        _, reached = self._navigate(nav_model, pickup)
+        _, reached = self._navigate(nav_model, pickup, other_positions)
         if not reached:
             return -80.0 if self.battery <= 0 else -10.0
-        _, reached = self._navigate(nav_model, DROPOFF)
+        _, reached = self._navigate(nav_model, DROPOFF, other_positions)
         if not reached:
             return -80.0 if self.battery <= 0 else -10.0
         return 100.0
@@ -154,64 +155,70 @@ class WarehouseStage2:
         self.idle_time += idle_steps
         return -20.0 + 0.5 * idle_steps
 
-    def execute_go_charge(self, nav_model: torch.nn.Module) -> float:
-        """Navigate to nearest charger, charge to full, reposition. Reward = -25."""
-        ch_pos, _ = nearest_charger_info(self.pos)
-        _, reached = self._navigate(nav_model, ch_pos)
+    def execute_go_charge(self, nav_model: torch.nn.Module,
+                          other_positions: frozenset = frozenset()) -> float:
+        """Navigate to nearest free charger, charge to full, reposition. Reward = -25."""
+        free_chargers = [ch for ch in CHARGERS if ch not in other_positions] or CHARGERS
+        ch_pos = min(free_chargers, key=lambda ch: bfs_dist(self.pos, ch))
+        _, reached = self._navigate(nav_model, ch_pos, other_positions)
         if reached:
             self.battery = 100.0
             wait_pos = min(WAIT_POSITIONS, key=lambda p: bfs_dist(self.pos, p))
-            self._navigate(nav_model, wait_pos)
+            self._navigate(nav_model, wait_pos, other_positions)
         self.idle_time = 0
         return -25.0
 
     # ------------------------------------------------------------------
     # Navigation (outcome-only — reward does not enter assignment replay)
     # ------------------------------------------------------------------
-    def _navigate(self, nav_model: torch.nn.Module, target: tuple):
+    def _navigate(self, nav_model: torch.nn.Module, target: tuple,
+                  other_positions: frozenset = frozenset()):
         """
-        Drive frozen nav policy toward target.
+        Drive frozen nav policy toward target, treating other_positions as
+        blocked cells so the robot navigates around other robots.
         Returns (None, reached: bool).
-        Internal nav rewards are discarded — execute_order returns
-        a clean outcome reward to the assignment DQN instead.
         """
         device = next(nav_model.parameters()).device
         for _ in range(MAX_NAV_STEPS):
-            state = self._get_nav_state(target)
+            state = self._get_nav_state(target, other_positions)
             with torch.no_grad():
                 logits, _ = nav_model(
                     torch.tensor(state, device=device).unsqueeze(0))
                 logits = torch.clamp(logits.squeeze(0), -20.0, 20.0)
                 probs  = torch.softmax(logits / 0.3, dim=-1)
                 action = torch.distributions.Categorical(probs).sample().item()
-            _, breakdown = self._nav_step(action)
+            _, breakdown = self._nav_step(action, other_positions)
             if breakdown:
                 return None, False
             if self.pos == target:
                 return None, True
         return None, False   # timeout
 
-    def _nav_step(self, action: int):
+    def _nav_step(self, action: int, other_positions: frozenset = frozenset()):
         """Execute one raw navigation step.  Returns (reward, breakdown_flag)."""
         dr, dc = self.MOVE_ACTIONS[action]
         r, c   = self.pos
         nr     = int(np.clip(r + dr, 0, GRID_SIZE - 1))
         nc     = int(np.clip(c + dc, 0, GRID_SIZE - 1))
         reward = 0.0
-        if self._grid[nr, nc] == -1:        # shelf collision
+        if self._grid[nr, nc] == -1:            # shelf — bounce, penalty
             reward -= 20.0
+        elif (nr, nc) in other_positions:        # another robot — wait, no penalty
+            pass
         else:
             self.pos = (nr, nc)
             if action == 5 and self.pos in set(CHARGERS):
                 self.battery = min(100.0, self.battery + CHARGE_RATE)
-            elif action != 4:               # not Stay
+            elif action != 4:                   # not Stay
                 self.battery = max(0.0, self.battery - NAV_DRAIN)
         if self.battery <= 0:
             reward -= 150.0
         return reward, self.battery <= 0
 
-    def _get_nav_state(self, target: tuple) -> np.ndarray:
-        """13-dim state matching Stage 1 PPO's expected input format."""
+    def _get_nav_state(self, target: tuple,
+                       other_positions: frozenset = frozenset()) -> np.ndarray:
+        """13-dim nav state. Other robots are injected as blocked cells into
+        the directional sensors so the existing nav policy avoids them."""
         px, py      = self.pos
         gx, gy      = target
         ch_pos, _   = nearest_charger_info(self.pos)
@@ -222,11 +229,13 @@ class WarehouseStage2:
             blocked = 1.0 if (
                 nr < 0 or nr >= GRID_SIZE or nc < 0 or nc >= GRID_SIZE
                 or self._grid[nr, nc] == -1
+                or (nr, nc) in other_positions
             ) else 0.0
             d = 0
             cr2, cc2 = nr, nc
             while (0 <= cr2 < GRID_SIZE and 0 <= cc2 < GRID_SIZE
-                   and self._grid[cr2, cc2] != -1):
+                   and self._grid[cr2, cc2] != -1
+                   and (cr2, cc2) not in other_positions):
                 d += 1
                 cr2 += dr
                 cc2 += dc

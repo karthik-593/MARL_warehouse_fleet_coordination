@@ -539,76 +539,39 @@ def record_nav_episode(model, level: int, device, seed=0,
                 break
         return frames
 
-    # trained with dynamic obstacles: step-by-step so obstacles visibly move
-    if env.n_dynamic > 0:
-        frames  = []
-        trail   = []
-        success = False
-        step_i  = 0
-        while not env.done:
-            trail.append(env.pos)
-            frames.append({
-                "type": "nav", "level": level, "size": env.size,
-                "grid": env.grid.copy(), "pos": env.pos,
-                "goal": env.goal, "battery": env.battery,
-                "dyn_obs": [d.pos for d in env.dyn_obs],
-                "trail": list(trail[-25:]),
-                "action": "Move",
-                "step": step_i, "untrained": False,
-            })
-            st = torch.tensor(state, device=device).unsqueeze(0)
-            with torch.no_grad():
-                logits, _ = model(st)
-            logits = torch.clamp(logits.squeeze(0), -20.0, 20.0)
-            probs  = torch.softmax(logits / 0.3, dim=-1)
-            action = torch.distributions.Categorical(probs).sample().item()
-            state, _, done, success = env.step(action)
-            step_i += 1
-            if done:
-                frames.append({**frames[-1], "pos": env.pos,
-                               "battery": env.battery,
-                               "dyn_obs": [d.pos for d in env.dyn_obs],
-                               "status": ("REACHED GOAL!" if success
-                                          else "BATTERY DEAD" if env.battery <= 0
-                                          else "TIMEOUT")})
-                break
-        return frames
-
-    # trained without dynamic obstacles: BFS path
-    blocked = frozenset(
-        (r, c) for r in range(env.size) for c in range(env.size)
-        if env.grid[r, c] == -1
-    )
-    bfs_positions = _bfs_path(env.pos, env.goal, blocked, grid_size=env.size)
-
-    battery   = env.battery
-    trail     = []
-    frames    = []
-    grid_snap = env.grid.copy()
-
-    for step_i, pos in enumerate(bfs_positions):
-        trail.append(pos)
+    # trained: step-by-step model inference (shows actual policy behavior)
+    frames  = []
+    trail   = []
+    success = False
+    step_i  = 0
+    while not env.done:
+        trail.append(env.pos)
         frames.append({
             "type": "nav", "level": level, "size": env.size,
-            "grid": grid_snap, "pos": pos,
-            "goal": env.goal, "battery": battery,
-            "dyn_obs": [],
+            "grid": env.grid.copy(), "pos": env.pos,
+            "goal": env.goal, "battery": env.battery,
+            "dyn_obs": [d.pos for d in env.dyn_obs],
             "trail": list(trail[-25:]),
             "action": "Move",
             "step": step_i, "untrained": False,
         })
-        if step_i > 0:
-            battery = max(0.0, battery - 1.0)
-        if battery <= 0:
+        st = torch.tensor(state, device=device).unsqueeze(0)
+        with torch.no_grad():
+            out = model(st)
+            logits = out[0] if isinstance(out, tuple) else out  # PPO→tuple, DQN→tensor
+        logits = torch.clamp(logits.squeeze(0), -20.0, 20.0)
+        probs  = torch.softmax(logits / 0.3, dim=-1)
+        action = torch.distributions.Categorical(probs).sample().item()
+        state, _, done, success = env.step(action)
+        step_i += 1
+        if done:
+            frames.append({**frames[-1], "pos": env.pos,
+                           "battery": env.battery,
+                           "dyn_obs": [d.pos for d in env.dyn_obs],
+                           "status": ("REACHED GOAL!" if success
+                                      else "BATTERY DEAD" if env.battery <= 0
+                                      else "TIMEOUT")})
             break
-
-    success = bool(bfs_positions) and bfs_positions[-1] == env.goal
-    frames.append({**frames[-1],
-                   "pos": bfs_positions[-1] if bfs_positions else env.pos,
-                   "battery": battery,
-                   "status": ("REACHED GOAL!" if success
-                               else "BATTERY DEAD" if battery <= 0
-                               else "TIMEOUT")})
     return frames
 
 

@@ -77,36 +77,40 @@ def _bfs_path(start, target, blocked, grid_size=None):
 
 
 def _trace_nav_path(start_pos, start_battery, nav_model, target, device,
-                    max_steps=120, skip=1):
+                    other_positions=frozenset(), max_steps=300, skip=1):
     """
-    BFS path from start_pos to target with battery simulation.
-    Returns list of (pos, battery) tuples.
+    Step-by-step nav model execution from start_pos to target.
+    Returns list of (pos, battery) tuples — actual policy behaviour.
+    other_positions: cells occupied by other robots (treated as blocked).
     skip: keep every skip-th frame (1 = all steps).
     """
-    from envs.assign_env import SHELVES, NAV_DRAIN, CHARGE_RATE, CHARGERS
+    from envs.assign_env import WarehouseStage2
 
-    blocked = SHELVES                        # only shelves block movement
-    bfs     = _bfs_path(start_pos, target, blocked)
+    agent         = WarehouseStage2()
+    agent.pos     = start_pos
+    agent.battery = float(start_battery)
+    full_path     = [(start_pos, float(start_battery))]
 
-    # Simulate battery along path
-    battery = start_battery
-    path    = []
-    for pos in bfs:
-        path.append((pos, battery))
-        if pos in set(CHARGERS):
-            battery = min(100.0, battery + CHARGE_RATE)
-        elif pos != start_pos:              # drain on every non-start move
-            battery = max(0.0, battery - NAV_DRAIN)
-        if battery <= 0:
+    for _ in range(max_steps):
+        if agent.pos == target or agent.battery <= 0:
             break
+        state = agent._get_nav_state(target, other_positions)
+        st    = torch.tensor(state, device=device).unsqueeze(0)
+        with torch.no_grad():
+            out    = nav_model(st)
+            logits = out[0] if isinstance(out, tuple) else out
+        logits = torch.clamp(logits.squeeze(0), -20.0, 20.0)
+        probs  = torch.softmax(logits / 0.3, dim=-1)
+        action = torch.distributions.Categorical(probs).sample().item()
+        agent._nav_step(action, other_positions)
+        full_path.append((agent.pos, agent.battery))
 
-    # Thin frames while always keeping first and last
     if skip > 1:
-        thinned = path[::skip]
-        if not thinned or thinned[-1] != path[-1]:
-            thinned.append(path[-1])
+        thinned = full_path[::skip]
+        if not thinned or thinned[-1] != full_path[-1]:
+            thinned.append(full_path[-1])
         return thinned
-    return path
+    return full_path
 
 
 # ===========================================================================
@@ -730,14 +734,18 @@ def record_mappo_episode(nav_model, actor, device, seed=0,
 
         # ── Navigation frames for winner ──────────────────────────────
         if show_nav and winner is not None:
-            w_agent  = env.agents[winner]
-            w_pos    = w_agent.pos
-            w_bat    = w_agent.battery
-            trail    = []
+            w_agent   = env.agents[winner]
+            w_pos     = w_agent.pos
+            w_bat     = w_agent.battery
+            other_pos = frozenset(env.agents[j].pos
+                                  for j in range(N_AGENTS) if j != winner)
+            trail     = []
 
             # Winner → pickup
             nav_to_pickup = _trace_nav_path(w_pos, w_bat, nav_model,
-                                            pickup, device, skip=nav_skip)
+                                            pickup, device,
+                                            other_positions=other_pos,
+                                            skip=nav_skip)
             for step_i, (pos, bat) in enumerate(nav_to_pickup):
                 trail.append(pos)
                 ov = {winner: {"pos": pos, "battery": bat}}
@@ -754,7 +762,9 @@ def record_mappo_episode(nav_model, actor, device, seed=0,
 
             # Winner → dropoff
             nav_to_drop = _trace_nav_path(last_pos, last_bat, nav_model,
-                                          DROPOFF, device, skip=nav_skip)
+                                          DROPOFF, device,
+                                          other_positions=other_pos,
+                                          skip=nav_skip)
             for step_i, (pos, bat) in enumerate(nav_to_drop):
                 trail2.append(pos)
                 ov = {winner: {"pos": pos, "battery": bat}}

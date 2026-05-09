@@ -42,12 +42,12 @@ class PPO(nn.Module):
         return self.actor(f), self.critic(f)
 
 
-def transfer_dqn_to_ppo(dqn: DQN, ppo: PPO, scale: float = 0.1):
-    """Warm-start PPO shared and actor weights from a trained DQN."""
-    ppo.shared[0].weight.data = dqn.shared[0].weight.data.clone() * scale
-    ppo.shared[0].bias.data   = dqn.shared[0].bias.data.clone()   * scale
-    ppo.actor[0].weight.data  = dqn.head[0].weight.data.clone()   * scale
-    ppo.actor[0].bias.data    = dqn.head[0].bias.data.clone()     * scale
+def transfer_dqn_to_ppo(dqn: DQN, ppo: PPO):
+    """Warm-start PPO shared and actor hidden weights from a trained DQN."""
+    ppo.shared[0].weight.data = dqn.shared[0].weight.data.clone()
+    ppo.shared[0].bias.data   = dqn.shared[0].bias.data.clone()
+    ppo.actor[0].weight.data  = dqn.head[0].weight.data.clone()
+    ppo.actor[0].bias.data    = dqn.head[0].bias.data.clone()
 
 
 def select_action(model: nn.Module, state, temperature: float = 0.3) -> int:

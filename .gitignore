@@ -17,12 +17,8 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
-# Checkpoints — keep model weights, ignore generated artifacts
-checkpoints/*.npy
-checkpoints/*.png
-checkpoints/*.json
+# Checkpoints — track everything (models + results + plots)
 checkpoints/animations/
-!checkpoints/*.pt
 
 # Notebooks checkpoint dir (stray outputs from notebook runs)
 notebooks/checkpoints/

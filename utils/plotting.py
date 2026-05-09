@@ -194,11 +194,11 @@ def decision_heatmap(model: torch.nn.Module, device: torch.device,
 # ---------------------------------------------------------------------------
 def plot_mappo_history(history: dict, out_dir: str = "checkpoints"):
     """
-    4-panel dashboard for MAPPO training.
+    6-panel dashboard for MAPPO training.
     history keys: team_rewards, actor_losses, critic_losses,
-                  accept_rates, charge_rates, delivery_rates
+                  accept_rates, charge_rates, delivery_rates, breakdown_rates
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     fig.suptitle(
         "Stage 3 — MAPPO  (3 agents, CTDE: shared actor + centralised critic)",
         fontsize=13, fontweight="bold",
@@ -216,32 +216,52 @@ def plot_mappo_history(history: dict, out_dir: str = "checkpoints"):
     axes[0, 1].set_ylim(0, 1)
     axes[0, 1].grid(alpha=0.3)
 
-    axes[1, 0].plot(smooth(history["accept_rates"]), color="#2E7D32", lw=1.5,
-                    label="Accept")
-    axes[1, 0].plot(smooth(history["charge_rates"]), color="#E65100", lw=1.5,
-                    label="GoCharge")
-    axes[1, 0].set_title("Accept / GoCharge Rates per Agent")
+    # Breakdown rate panel (Fix 5)
+    brk = history.get("breakdown_rates", [])
+    axes[1, 0].plot(smooth(brk) if brk else [], color="#C62828", lw=1.5)
+    axes[1, 0].set_title("Breakdown Rate | Accepted Orders  (r < −50)")
     axes[1, 0].set_xlabel("Episode")
     axes[1, 0].set_ylim(0, 1)
-    axes[1, 0].legend(fontsize=9)
+    axes[1, 0].axhline(0.05, color="black", lw=0.5, ls="--", label="5% target")
+    axes[1, 0].legend(fontsize=8)
     axes[1, 0].grid(alpha=0.3)
+
+    axes[1, 1].plot(smooth(history["accept_rates"]), color="#2E7D32", lw=1.5,
+                    label="Accept")
+    axes[1, 1].plot(smooth(history["charge_rates"]), color="#E65100", lw=1.5,
+                    label="GoCharge")
+    axes[1, 1].set_title("Accept / GoCharge Rates per Agent")
+    axes[1, 1].set_xlabel("Episode")
+    axes[1, 1].set_ylim(0, 1)
+    axes[1, 1].legend(fontsize=9)
+    axes[1, 1].grid(alpha=0.3)
 
     # Stacked action distribution
     ar = np.array(history["accept_rates"])
     cr = np.array(history["charge_rates"])
     ir = np.clip(1.0 - ar - cr, 0.0, 1.0)
     x  = np.arange(len(ar))
-    axes[1, 1].stackplot(
+    axes[2, 0].stackplot(
         x, ar, cr, ir,
         labels=["Accept", "GoCharge", "Idle"],
         colors=["#2E7D32", "#E65100", "#9E9E9E"],
         alpha=0.7,
     )
-    axes[1, 1].set_title("Action Distribution over Training")
-    axes[1, 1].set_xlabel("Episode")
-    axes[1, 1].set_ylim(0, 1)
-    axes[1, 1].legend(loc="upper right", fontsize=8)
-    axes[1, 1].grid(alpha=0.3)
+    axes[2, 0].set_title("Action Distribution over Training")
+    axes[2, 0].set_xlabel("Episode")
+    axes[2, 0].set_ylim(0, 1)
+    axes[2, 0].legend(loc="upper right", fontsize=8)
+    axes[2, 0].grid(alpha=0.3)
+
+    # Actor / Critic loss
+    axes[2, 1].plot(smooth(history["actor_losses"],  window=20), color="#1565C0",
+                    lw=1.5, label="Actor")
+    axes[2, 1].plot(smooth(history["critic_losses"], window=20), color="#C62828",
+                    lw=1.5, label="Critic")
+    axes[2, 1].set_title("PPO Losses (per rollout batch)")
+    axes[2, 1].set_xlabel("Rollout batch")
+    axes[2, 1].legend(fontsize=9)
+    axes[2, 1].grid(alpha=0.3)
 
     plt.tight_layout()
     out = os.path.join(out_dir, "mappo_training_curves.png")

@@ -24,9 +24,21 @@ Observation (9-dim per robot)
   [5] idle_time         / 50
   [6] orders_remaining  / N_ORDERS
   [7] battery_margin    clip((battery − trip_cost) / 100, −1, 1)
-  [8] is_eligible       1.0 if in K nearest robots, 0.0 otherwise  ← NEW
+  [8] is_eligible       1.0 if in K nearest robots, 0.0 otherwise
 
-Global state (critic) : concat of all 3 local obs = 27-dim
+Global state (centralised critic) — 32-dim
+-------------------------------------------
+  [0:3]   battery of each agent                     / 100
+  [3:9]   position (row, col) of each agent         / GRID_SIZE
+  [9:12]  idle_time of each agent                   / 50
+  [12:15] is_eligible flag per agent                binary
+  [15:17] current pickup (row, col)                 / GRID_SIZE
+  [17:23] next 3 future pickups (row, col each)     / GRID_SIZE, zero-padded
+  [23:26] BFS dist each agent → current pickup      / MAX_D
+  [26:29] BFS dist each agent → nearest charger     / MAX_D
+  [29]    agents currently at a charger             / N_AGENTS
+  [30]    orders remaining                          (N_ORDERS − order_i) / N_ORDERS
+  [31]    episode progress                          order_i / N_ORDERS
 """
 
 import numpy as np
@@ -34,14 +46,17 @@ import random
 import torch
 
 from envs.assign_env import (
-    WarehouseStage2, PICKUP_POINTS, FREE_CELLS, bfs_dist, TRIP_COST_RATE
+    WarehouseStage2, PICKUP_POINTS, FREE_CELLS, bfs_dist, TRIP_COST_RATE,
+    GRID_SIZE, CHARGERS, nearest_charger_info,
 )
 
-N_AGENTS  = 3
-N_ORDERS  = 10    # orders per episode
-K_NEAREST = 2     # robots eligible to bid per order
-OBS_DIM   = 9     # 8 base features + is_eligible
-GLOBAL_DIM = N_AGENTS * OBS_DIM   # 27
+_MAX_D = 18.0   # normalisation constant for BFS distances (matches assign_env)
+
+N_AGENTS   = 3
+N_ORDERS   = 10    # orders per episode
+K_NEAREST  = 2     # robots eligible to bid per order
+OBS_DIM    = 9     # 8 base features + is_eligible
+GLOBAL_DIM = 32    # richer centralised-critic state (see module docstring)
 
 
 class MultiAgentWarehouse:
@@ -154,6 +169,67 @@ class MultiAgentWarehouse:
         sorted_i = sorted(range(N_AGENTS), key=lambda i: dists[i])
         return set(sorted_i[:K_NEAREST])
 
+    def _get_global_state(self, pickup: tuple, eligible: set) -> np.ndarray:
+        """Build the 32-dim global state for the centralised critic."""
+        _charger_set = set(CHARGERS)
+
+        # [0:3] batteries
+        batteries = [a.battery / 100.0 for a in self.agents]
+
+        # [3:9] positions (row/GRID_SIZE, col/GRID_SIZE per agent)
+        positions = [c for a in self.agents
+                     for c in (a.pos[0] / GRID_SIZE, a.pos[1] / GRID_SIZE)]
+
+        # [9:12] idle times
+        idle_times = [min(a.idle_time, 50) / 50.0 for a in self.agents]
+
+        # [12:15] eligibility flags
+        eligible_flags = [float(i in eligible) for i in range(N_AGENTS)]
+
+        # [15:17] current pickup
+        cur_pickup = [pickup[0] / GRID_SIZE, pickup[1] / GRID_SIZE]
+
+        # [17:23] next 3 future pickups, zero-padded
+        future = []
+        for k in range(1, 4):
+            idx = self.order_i + k
+            if idx < N_ORDERS:
+                p = self.orders[idx]
+                future += [p[0] / GRID_SIZE, p[1] / GRID_SIZE]
+            else:
+                future += [0.0, 0.0]
+
+        # [23:26] BFS dist each agent → current pickup
+        dist_pickup = [
+            min(bfs_dist(a.pos, pickup), _MAX_D) / _MAX_D
+            for a in self.agents
+        ]
+
+        # [26:29] BFS dist each agent → nearest charger
+        dist_charger = [
+            min(nearest_charger_info(a.pos)[1], _MAX_D) / _MAX_D
+            for a in self.agents
+        ]
+
+        # [29] fraction of agents currently standing on a charger
+        at_charger = sum(a.pos in _charger_set for a in self.agents) / N_AGENTS
+
+        # [30] orders remaining
+        orders_remaining = (N_ORDERS - self.order_i) / N_ORDERS
+
+        # [31] episode progress
+        progress = self.order_i / N_ORDERS
+
+        gs = np.array(
+            batteries + positions + idle_times + eligible_flags
+            + cur_pickup + future
+            + dist_pickup + dist_charger
+            + [at_charger, orders_remaining, progress],
+            dtype=np.float32,
+        )
+        assert gs.shape == (GLOBAL_DIM,), f"global state shape {gs.shape} != ({GLOBAL_DIM},)"
+        return gs
+
     def _get_agent_obs(self, agent_idx: int, pickup: tuple,
                        is_eligible: bool) -> np.ndarray:
         """Build 9-dim obs for one robot given the current order."""
@@ -172,4 +248,4 @@ class MultiAgentWarehouse:
             self._get_agent_obs(i, pickup, i in eligible)
             for i in range(N_AGENTS)
         ])                                # [N_AGENTS, OBS_DIM]
-        return obs, obs.flatten()         # [N_AGENTS, 9], [27]
+        return obs, self._get_global_state(pickup, eligible)

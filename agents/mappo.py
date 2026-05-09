@@ -28,13 +28,13 @@ class AssignmentActor(nn.Module):
 
 class CentralisedCritic(nn.Module):
     """
-    Centralised critic — sees all agents' observations concatenated.
-    Used only during training; not deployed at inference.
-    Input : 27-dim global state (3 agents × 9 features)
+    Centralised critic — sees enriched global state (batteries, positions,
+    order queue, charger distances, etc.).  Used only during training.
+    Input : 32-dim global state (see envs/marl_env.py module docstring)
     Output: scalar value estimate
     """
 
-    def __init__(self, global_dim: int = 27):
+    def __init__(self, global_dim: int = 32):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(global_dim, 256), nn.ReLU(),
@@ -60,8 +60,14 @@ def transfer_dqn_to_actor(dqn: nn.Module, actor: AssignmentActor):
     sd_act["net.0.weight"] = new_w
     sd_act["net.0.bias"]   = sd_dqn["net.0.bias"].clone()
 
-    for key in ["net.2.weight", "net.2.bias", "net.4.weight", "net.4.bias"]:
+    for key in ["net.2.weight", "net.2.bias"]:
         if key in sd_dqn:
             sd_act[key] = sd_dqn[key].clone()
+
+    # Scale output head down: DQN Q-values are ~±80, which saturates softmax.
+    # Dividing by 20 brings logits to ~±4 so initial policy is exploratory.
+    for key in ["net.4.weight", "net.4.bias"]:
+        if key in sd_dqn:
+            sd_act[key] = sd_dqn[key].clone() * 0.05
 
     actor.load_state_dict(sd_act)

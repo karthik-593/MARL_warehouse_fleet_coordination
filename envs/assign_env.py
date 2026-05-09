@@ -15,17 +15,17 @@ CHARGE_RATE      = 20     # % gained per Charge action at a charger
 MAX_NAV_STEPS    = 300    # max steps for any single navigation leg
 
 SHELVES: frozenset = frozenset([
-    (1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3),   # Block A (top-left)
-    (1, 6), (1, 7), (1, 8), (2, 6), (2, 7), (2, 8),   # Block B (top-right)
-    (6, 1), (6, 2), (6, 3), (7, 1), (7, 2), (7, 3),   # Block C (bottom-left)
-    (6, 6), (6, 7), (6, 8), (7, 6), (7, 7), (7, 8),   # Block D (bottom-right)
+    (2, 2), (2, 3), (3, 2), (3, 3),   # Block A (top-left)
+    (2, 6), (2, 7), (3, 6), (3, 7),   # Block B (top-right)
+    (6, 2), (6, 3), (7, 2), (7, 3),   # Block C (bottom-left)
+    (6, 6), (6, 7), (7, 6), (7, 7),   # Block D (bottom-right)
 ])
 
 PICKUP_POINTS: list = [
-    (0, 2), (3, 2),   # Block A
-    (0, 7), (3, 7),   # Block B
+    (1, 2), (4, 2),   # Block A
+    (1, 6), (4, 6),   # Block B
     (5, 2), (8, 2),   # Block C
-    (5, 7), (8, 7),   # Block D
+    (5, 6), (8, 6),   # Block D
 ]
 
 DROPOFF:  tuple = (9, 9)
@@ -148,7 +148,8 @@ class WarehouseStage2:
         if not reached:
             return -80.0 if self.battery <= 0 else -10.0
         # Reposition away from DROPOFF so it stays free for the next winner
-        wait_pos = min(WAIT_POSITIONS, key=lambda p: bfs_dist(self.pos, p))
+        free_waits = [p for p in WAIT_POSITIONS if p not in other_positions] or WAIT_POSITIONS
+        wait_pos = min(free_waits, key=lambda p: bfs_dist(self.pos, p))
         self._navigate(nav_model, wait_pos, other_positions)
         return 100.0
 
@@ -181,6 +182,8 @@ class WarehouseStage2:
         blocked cells so the robot navigates around other robots.
         Returns (None, reached: bool).
         """
+        if self.pos == target:
+            return None, True
         device = next(nav_model.parameters()).device
         for _ in range(MAX_NAV_STEPS):
             state = self._get_nav_state(target, other_positions)

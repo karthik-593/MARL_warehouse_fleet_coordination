@@ -263,7 +263,7 @@ def main():
 
     assign_dqn, history = train_stage2(
         nav_model     = nav_model,
-        episodes      = 8_000,
+        episodes      = 16_000,
         n_orders      = 5,
         gamma         = 0.99,
         lr            = 3e-4,
@@ -271,7 +271,7 @@ def main():
         tau           = 0.005,
         eps_start     = 1.0,
         eps_decay     = 0.9993,
-        eps_min       = 0.05,
+        eps_min       = 0.01,
         warmup        = 300,
         verbose_every = 500,
     )

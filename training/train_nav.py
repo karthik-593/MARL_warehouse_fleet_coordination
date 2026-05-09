@@ -244,10 +244,10 @@ def main():
     plot_nav_history(r3, s3, level=3, out_dir=CKPT_DIR)
 
     # ── Level 4: PPO 10×10 + static + dynamic obstacles ──────────────────
-    print("\n[L4] PPO  10×10 + dynamic obstacles  (16 000 episodes)")
+    print("\n[L4] PPO  10×10 + dynamic obstacles  (20 000 episodes)")
     ppo_l4 = PPO(state_dim=13, action_dim=6).to(DEVICE)
     ppo_l4.load_state_dict(ppo_l3.state_dict())
-    ppo_l4, r4, s4 = train_ppo(level=4, model=ppo_l4, episodes=16_000)
+    ppo_l4, r4, s4 = train_ppo(level=4, model=ppo_l4, episodes=20_000)
     all_rewards[4] = r4
     torch.save(ppo_l4.state_dict(), os.path.join(CKPT_DIR, "ppo_final.pt"))
     print(f"\n✓  Saved final nav policy → {CKPT_DIR}/ppo_final.pt")

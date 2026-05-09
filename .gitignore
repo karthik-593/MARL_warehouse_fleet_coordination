@@ -17,8 +17,8 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
-# Checkpoints — track everything (models + results + plots)
-checkpoints/animations/
+# Checkpoints — all generated artifacts (models, curves, plots)
+checkpoints/
 
 # Notebooks checkpoint dir (stray outputs from notebook runs)
 notebooks/checkpoints/

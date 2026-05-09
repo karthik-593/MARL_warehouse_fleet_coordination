@@ -436,7 +436,7 @@ def main():
     actor, critic, history = train_mappo(
         nav_model   = nav_model,
         assign_dqn  = assign_dqn,
-        episodes    = 20_000,
+        episodes    = 50_000,
         resume_ckpt = resume_ckpt,
     )
     print("\nTraining complete.")

@@ -8,7 +8,7 @@ A 3-stage curriculum that trains autonomous warehouse robots to navigate, accept
 
 | Stage | Algorithm | Agents | Task |
 |-------|-----------|--------|------|
-| 1 — Navigation | DQN (L1–L2) → PPO (L3–L5) | 1 | Reach goal, avoid obstacles, manage battery |
+| 1 — Navigation | DQN (L1–L2) → PPO (L3–L6) | 1 | Reach goal, avoid obstacles, manage battery |
 | 2 — Assignment | Double DQN | 1 | Decide Accept / Decline-idle / GoCharge per order |
 | 3 — Coordination | MAPPO (CTDE) | 3 | Coordinate order assignment across a shared fleet |
 
@@ -20,25 +20,25 @@ A 3-stage curriculum that trains autonomous warehouse robots to navigate, accept
 
 | Metric | Value |
 |--------|-------|
-| Mean episode reward | 300.48 |
-| Deliveries / episode | 3.40 / 5  (68.0%) |
-| Accept rate | 72.0% |
-| GoCharge rate | 18.1% |
-| Idle rate | 0.0% |
-| Breakdowns / episode | 0.21 |
+| Mean episode reward | 374.65 |
+| Deliveries / episode | 3.98 / 5  (79.6%) |
+| Accept rate | 80.1% |
+| GoCharge rate | 16.5% |
+| Idle rate | 0.8% |
+| Breakdowns / episode | 0.12 |
 
 **Stage 3 — MAPPO** (200 greedy episodes, 10 orders/episode, 3 robots)
 
 | Metric | Value |
 |--------|-------|
-| Mean team reward | 517.01 |
-| Deliveries / episode | 9.46 / 10  (94.6%) |
-| Accept rate | 80.65% |
-| GoCharge rate | 17.10% |
-| Idle rate | 2.25% |
-| Breakdowns / episode | 0.25 |
+| Mean team reward | 306.14 |
+| Deliveries / episode | 8.06 / 10  (80.6%) |
+| Accept rate | 60.7% |
+| GoCharge rate | 34.5% |
+| Idle rate | 4.8% |
+| Breakdowns / episode | 0.47 |
 
-3 robots deliver **2.78×** more than a single Stage 2 robot (92.7% of the theoretical maximum).
+The 3-robot team achieves **80.6% delivery rate** on 10 orders per episode, matching the single-robot Stage-2 efficiency (79.6%) while handling twice the workload.
 
 ---
 
@@ -95,7 +95,7 @@ Global state for the centralised critic: 27-dim (3 agents × 9).
 | Module | Input | Hidden | Output |
 |--------|-------|--------|--------|
 | Nav DQN (L1–L2) | 13 | 256 → 256 | 6 Q-values |
-| Nav PPO (L3–L5) | 13 | 256 → 256 | 6 logits + value |
+| Nav PPO (L3–L6) | 13 | 256 → 256 | 6 logits + value |
 | Assignment DQN | 8 | 128 → 128 | 3 Q-values |
 | MAPPO Actor | 9 | 128 → 128 | 3 logits |
 | MAPPO Critic | 27 | 256 → 256 | scalar value |
@@ -115,6 +115,9 @@ python -m training.train_nav
 # Stage 1 — L5 warehouse fine-tune (run after train_nav)
 python -m training.train_nav_l5
 
+# Stage 1 — L6 warehouse + robot obstacles (run after train_nav_l5)
+python -m training.train_nav_l6
+
 # Stage 2 — assignment DQN
 python -m training.train_assign
 
@@ -133,14 +136,14 @@ python -m training.train_mappo
 | Batch | 256 |
 | γ | 0.99 |
 | LR | 5e-4 |
-| ε decay | 0.9995/step, min 0.10 |
+| ε decay | 0.9995/step, min 0.02 |
 | Target update τ | 0.005 |
 
 **Stage 1 — PPO (L3, L4)**
 
 | Param | Value |
 |-------|-------|
-| Episodes | L3: 20 000  ·  L4: 16 000 |
+| Episodes | L3: 20 000  ·  L4: 20 000 |
 | Rollout | 32 |
 | Clip ε | 0.2 |
 | Entropy coef | 0.03 |
@@ -150,32 +153,42 @@ python -m training.train_mappo
 
 | Param | Value |
 |-------|-------|
-| Episodes | 15 000 |
-| Training mix | 70% warehouse + 30% random obstacles |
+| Episodes | 30 000 |
+| Training mix | 100% warehouse layout |
 | LR | 3e-5 (constant) |
+| Entropy coef | 0.02 |
+
+**Stage 1 — PPO L6 fine-tune**
+
+| Param | Value |
+|-------|-------|
+| Episodes | 30 000 |
+| Training mix | Warehouse + 2 static robot obstacles |
+| LR | 3e-5, cosine annealed to 3e-6 |
+| Entropy coef | 0.02 |
 
 **Stage 2 — Assignment DQN**
 
 | Param | Value |
 |-------|-------|
-| Episodes | 8 000 |
+| Episodes | 16 000 |
 | Batch | 128 |
 | γ | 0.99 |
 | LR | 3e-4 |
-| ε decay | 0.9993/episode, min 0.05 |
+| ε decay | 0.9993/episode, min 0.01 |
 | Warmup | 300 transitions |
 
 **Stage 3 — MAPPO**
 
 | Param | Value |
 |-------|-------|
-| Episodes | 10 000 |
+| Episodes | 50 000 |
 | Rollout | 16 |
 | Clip ε | 0.2 |
 | PPO epochs | 4 |
 | LR actor | 5e-5 |
-| LR critic | 1e-4 |
-| Entropy coef | 0.02 |
+| LR critic | 5e-5 |
+| Entropy coef | 0.05 → 0.01 (annealed) |
 | Checkpoint interval | 1 000 episodes |
 
 Stage 3 resumes automatically from `checkpoints/mappo_actor_ckpt.pt` if it exists.
@@ -184,18 +197,21 @@ Stage 3 resumes automatically from `checkpoints/mappo_actor_ckpt.pt` if it exist
 
 ## Animations
 
-Interactive HTML players for 25 scenarios (pause, scrub, speed control):
+Interactive HTML players for 6 scenarios (pause, scrub, speed control):
 
 ```bash
 # Open notebooks/animations.ipynb and run all cells
-# Output: checkpoints/animations/s01.html ... s25.html
+# Output: checkpoints/animations/s01.html ... s06.html
 ```
 
-| Scenarios | Stage | Content |
-|-----------|-------|---------|
-| S1–S9 | Navigation | Untrained vs trained, static/dynamic obstacles, battery |
-| S10–S15 | Assignment | Accept, GoCharge, low-battery edge cases |
-| S16–S25 | MAPPO | K=2 dispatch, bid conflicts, fleet coordination, baseline comparison |
+| Scenario | Stage | Content |
+|----------|-------|---------|
+| S1 | Navigation | 5×5 plain grid |
+| S2 | Navigation | 10×10 plain grid |
+| S3 | Navigation | 10×10 + stationary obstacles |
+| S4 | Navigation | 10×10 + moving obstacles |
+| S5 | Navigation | L6 warehouse + 2 frozen robot obstacles |
+| S6 | MAPPO | 3-robot coordination (best of 20 seeds) |
 
 ---
 
@@ -208,18 +224,20 @@ RL_multi_agent/
 │   ├── dqn.py              # AssignmentDQN (Stage 2)
 │   └── mappo.py            # AssignmentActor + CentralisedCritic (Stage 3)
 ├── envs/
-│   ├── nav_env.py          # Navigation environment, 5-level curriculum
+│   ├── nav_env.py          # Navigation environment, 6-level curriculum
+│   ├── multi_nav_env.py    # Multi-robot nav env for L6 obstacle fine-tuning
 │   ├── assign_env.py       # Assignment environment (Stage 2)
 │   └── marl_env.py         # Multi-agent environment (Stage 3)
 ├── training/
 │   ├── train_nav.py        # Stage 1: L1–L4 curriculum
 │   ├── train_nav_l5.py     # Stage 1: L5 warehouse fine-tune
+│   ├── train_nav_l6.py     # Stage 1: L6 warehouse + robot obstacles
 │   ├── train_assign.py     # Stage 2: Assignment DQN
 │   └── train_mappo.py      # Stage 3: MAPPO
 ├── utils/
 │   ├── replay_buffer.py    # Experience replay for DQN stages
 │   ├── plotting.py         # Training curve plots
-│   └── visualize.py        # Animation engine (25 scenarios, HTML/GIF)
+│   └── visualize.py        # Animation engine (6 scenarios, HTML)
 ├── notebooks/
 │   ├── stage1_navigation.ipynb
 │   ├── stage2_assignment.ipynb
@@ -258,4 +276,4 @@ Each order is offered to the two nearest robots by BFS distance.
 - If both bid Accept, the robot with higher `battery − trip_cost` wins; the other reverts to Idle.
 - Non-eligible robots decide freely.
 
-The 2.25% idle rate in evaluation reflects bid-conflict losers, not policy failure.
+The 4.8% idle rate in evaluation reflects bid-conflict losers, not policy failure.

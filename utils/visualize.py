@@ -1,5 +1,5 @@
 """
-Warehouse MARL — Simulation Animations  (6 scenarios)
+Warehouse MARL — Simulation Animations  (7 scenarios)
 
 Scenario  Stage   Description
    1      Nav     5×5 plain grid             — trained PPO (L6 model)
@@ -7,7 +7,8 @@ Scenario  Stage   Description
    3      Nav     10×10 stationary obstacles — trained PPO
    4      Nav     10×10 moving obstacles     — trained PPO
    5      Nav     L6 warehouse + 2 frozen robots — trained PPO (real deployment setup)
-   6      MAPPO   Stage 3 — 3-robot coordination
+   6      Assign  Stage 2 — single robot assignment DQN (best of 20 seeds)
+   7      MAPPO   Stage 3 — 3-robot coordination
 
 All navigation uses real policy inference — no BFS.
 
@@ -350,7 +351,58 @@ def _render_mappo_frame(ax_grid, ax_info, f):
                      fontweight="bold", transform=ax_info.transAxes)
 
 
-RENDERERS = {"nav": _render_nav_frame, "mappo": _render_mappo_frame}
+def _render_assign_frame(ax_grid, ax_info, f):
+    ax_grid.cla(); _clear_info(ax_info)
+    from envs.assign_env import DROPOFF
+    _setup_warehouse_bg(ax_grid)
+    phase  = f.get("phase", "decision")
+    pickup = f["pickup"]
+
+    if phase in ("decision", "nav_pickup"):
+        _highlight_cell(ax_grid, *pickup, 10, "#FDD835", "ORDER")
+    elif phase == "nav_dropoff":
+        _highlight_cell(ax_grid, *pickup, 10, "#90CAF9", "")
+        _highlight_cell(ax_grid, *DROPOFF, 10, C_DROPOFF, "DROPOFF")
+    elif phase == "nav_charger":
+        tgt = f.get("target")
+        if tgt:
+            _highlight_cell(ax_grid, *tgt, 10, C_CHARGE, "CHARGE")
+    elif phase == "outcome":
+        reward = f.get("reward", 0)
+        ec = "#66BB6A" if reward > 0 else "#EF5350"
+        _highlight_cell(ax_grid, *pickup, 10, ec, "")
+
+    if phase.startswith("nav_"):
+        _draw_trail(ax_grid, f.get("trail", []), 10, C_NAV_TRAIL)
+
+    _draw_robot(ax_grid, *f["pos"], 10, "#E53935", "R0", f["battery"], eligible=False)
+
+    ax_grid.set_title("Stage 2 — Assignment DQN   (1 robot, 3 actions)",
+                      fontsize=10, color="white", pad=4)
+    ax_grid.set_facecolor(C_BG)
+
+    _info_text(ax_info, 0.5, 0.99, "STAGE 2 — ASSIGNMENT DQN", fs=8.5, bold=True)
+    _info_text(ax_info, 0.5, 0.92, "single robot · greedy policy", fs=6.5, color="#B0BEC5")
+    _info_text(ax_info, 0.5, 0.84, f"Order  {f['order_i']} / {f['n_orders']}",
+               fs=11, bold=True)
+    _phase_badge(ax_info, phase, y=0.73)
+    _battery_strip(ax_info, f["battery"], 0.58)
+    reward = f.get("reward") if phase == "outcome" else None
+    _action_badge(ax_info, f.get("action", ""), reward=reward, y=0.45)
+
+    _info_text(ax_info, 0.5, 0.30, "── Running totals ──", fs=6.5, color="#78909C")
+    delivered = f["deliveries"]
+    resolved  = f["resolved"]
+    _info_text(ax_info, 0.5, 0.22,
+               f"Delivered :  {delivered} / {resolved}",
+               fs=8, bold=True,
+               color="#66BB6A" if delivered == resolved and resolved > 0 else "white")
+    _info_text(ax_info, 0.5, 0.12,
+               f"Reward :  {f['total_reward']:+.0f}", fs=8, bold=True)
+
+
+RENDERERS = {"nav": _render_nav_frame, "assign": _render_assign_frame,
+             "mappo": _render_mappo_frame}
 
 LEGENDS = {
     "nav": [mpatches.Patch(fc=C_GOAL,      label="Goal"),
@@ -358,6 +410,11 @@ LEGENDS = {
             mpatches.Patch(fc=C_OBS,       label="Obstacle"),
             mpatches.Patch(fc=C_DYNOBS,    label="Dyn.Obs"),
             mpatches.Patch(fc=C_FROZEN,    label="Frozen robot")],
+    "assign": [mpatches.Patch(fc=C_PICKUP,     label="Pickup"),
+               mpatches.Patch(fc=C_DROPOFF,    label="Dropoff"),
+               mpatches.Patch(fc=C_CHARGER,    label="Charger"),
+               mpatches.Patch(fc=C_SHELF,      label="Shelf"),
+               mpatches.Patch(fc=C_NAV_TRAIL,  label="Path taken")],
     "mappo": [mpatches.Patch(fc=ROBOT_COLORS[0], label="R0"),
               mpatches.Patch(fc=ROBOT_COLORS[1], label="R1"),
               mpatches.Patch(fc=ROBOT_COLORS[2], label="R2"),
@@ -547,6 +604,116 @@ def record_nav_l6_episode(model, device, seed=0) -> list:
     return frames
 
 
+def record_assign_episode(nav_model, assign_dqn, device,
+                          n_orders=5, seed=0, nav_skip=2) -> list:
+    """
+    Record a Stage-2 assignment episode (single robot, 5 orders).
+    Tries 20 seeds, returns the episode with most deliveries.
+    """
+    from envs.assign_env import (WarehouseStage2, PICKUP_POINTS, DROPOFF,
+                                  nearest_charger_info)
+
+    best_frames     = []
+    best_deliveries = -1
+    best_seed       = seed
+
+    for attempt_seed in range(seed, seed + 20):
+        random.seed(attempt_seed); np.random.seed(attempt_seed)
+        torch.manual_seed(attempt_seed)
+
+        robot  = WarehouseStage2()
+        robot.reset()
+        orders = [random.choice(PICKUP_POINTS) for _ in range(n_orders)]
+
+        frames       = []
+        deliveries   = 0
+        total_reward = 0.0
+
+        for order_i, pickup in enumerate(orders):
+            obs   = robot.get_obs(pickup, orders_remaining=n_orders - order_i)
+            obs_t = torch.tensor(obs, device=device).unsqueeze(0)
+            with torch.no_grad():
+                action = assign_dqn(obs_t).argmax().item()
+            action_name = ACTION_NAMES_ASSIGN[action]
+
+            base = {
+                "type": "assign",
+                "order_i": order_i + 1, "n_orders": n_orders,
+                "pickup": pickup, "action": action_name,
+                "deliveries": deliveries, "resolved": order_i,
+                "total_reward": total_reward,
+            }
+
+            # Decision frame — hold for 3 ticks so the viewer can read it
+            for _ in range(3):
+                frames.append({**base, "phase": "decision",
+                               "pos": robot.pos, "battery": robot.battery})
+
+            if action == 0:  # Accept → navigate pickup then dropoff
+                nav_pu = _trace_nav_path(robot.pos, robot.battery, nav_model,
+                                         pickup, device, skip=nav_skip)
+                trail = []
+                for pos, bat in nav_pu:
+                    trail.append(pos)
+                    frames.append({**base, "phase": "nav_pickup",
+                                   "pos": pos, "battery": bat,
+                                   "trail": list(trail[-30:])})
+                robot.pos, robot.battery = nav_pu[-1]
+
+                nav_do = _trace_nav_path(robot.pos, robot.battery, nav_model,
+                                          DROPOFF, device, skip=nav_skip)
+                trail2 = [robot.pos]
+                for pos, bat in nav_do:
+                    trail2.append(pos)
+                    frames.append({**base, "phase": "nav_dropoff",
+                                   "pos": pos, "battery": bat,
+                                   "trail": list(trail2[-30:])})
+                robot.pos, robot.battery = nav_do[-1]
+
+                if robot.pos == DROPOFF and robot.battery > 0:
+                    reward = 100.0
+                    deliveries += 1
+                else:
+                    reward = -80.0 if robot.battery <= 0 else -10.0
+
+            elif action == 1:  # Idle — robot stays put
+                robot.idle_time += 3
+                reward = -17.5  # midpoint of execute_decline_idle range
+
+            else:  # GoCharge
+                ch_pos, _ = nearest_charger_info(robot.pos)
+                nav_ch = _trace_nav_path(robot.pos, robot.battery, nav_model,
+                                          ch_pos, device, skip=nav_skip)
+                trail = []
+                for pos, bat in nav_ch:
+                    trail.append(pos)
+                    frames.append({**base, "phase": "nav_charger",
+                                   "pos": pos, "battery": bat,
+                                   "trail": list(trail[-30:]),
+                                   "target": ch_pos})
+                robot.pos, robot.battery = nav_ch[-1]
+                if robot.pos == ch_pos:
+                    robot.battery = 100.0
+                reward = -25.0
+
+            total_reward += reward
+            frames.append({**base,
+                           "phase": "outcome",
+                           "pos": robot.pos, "battery": robot.battery,
+                           "reward": reward,
+                           "deliveries": deliveries,
+                           "resolved": order_i + 1,
+                           "total_reward": total_reward})
+
+        if deliveries > best_deliveries:
+            best_deliveries = deliveries
+            best_frames     = frames
+            best_seed       = attempt_seed
+
+    print(f"  Assign: best seed={best_seed}, deliveries={best_deliveries}/{n_orders}")
+    return best_frames
+
+
 def record_mappo_episode(nav_model, actor, device, seed=0,
                          show_nav=True, nav_skip=2) -> list:
     """
@@ -672,6 +839,14 @@ def _load_nav_ppo(ckpt_dir, device, name="ppo_final.pt"):
         p.requires_grad_(False)
     return m
 
+def _load_assign_dqn(ckpt_dir, device):
+    from agents.dqn import AssignmentDQN
+    dqn = AssignmentDQN().to(device)
+    dqn.load_state_dict(torch.load(os.path.join(ckpt_dir, "assign_dqn.pt"),
+                                   map_location=device, weights_only=True))
+    dqn.eval()
+    return dqn
+
 def _load_mappo_actor(ckpt_dir, device):
     from agents.mappo import AssignmentActor
     from envs.marl_env import OBS_DIM
@@ -731,11 +906,21 @@ def build_scenario_catalog(ckpt_dir: str, device) -> dict:
     )
 
     cat[6] = dict(
+        title="Stage 2 — Assignment DQN: single robot (best of 20 seeds)",
+        desc="Trained Assignment DQN. Robot receives one order at a time and decides "
+             "Accept / Decline-idle / GoCharge based on battery and distance. "
+             "Nav policy executes the chosen leg.",
+        out="s06_assign_single_robot.html",
+        record=lambda: record_assign_episode(
+            nav(), _load_assign_dqn(ckpt_dir, device), device, seed=0),
+    )
+
+    cat[7] = dict(
         title="Stage 3 — MAPPO: 3-robot coordination (best of 20 seeds)",
         desc="Trained MAPPO actor. K=2 dispatch: 2 nearest robots bid per order. "
              "Winner navigates pickup → dropoff using the frozen nav policy. "
              "Battery managed autonomously with GoCharge decisions.",
-        out="s06_mappo_3robots.html",
+        out="s07_mappo_3robots.html",
         record=lambda: record_mappo_episode(
             nav(), _load_mappo_actor(ckpt_dir, device), device, seed=0),
     )
@@ -748,7 +933,7 @@ def build_scenario_catalog(ckpt_dir: str, device) -> dict:
 # ===========================================================================
 def run_all(ckpt_dir: str, out_dir: str, device, fmt: str = "html"):
     cat    = build_scenario_catalog(ckpt_dir, device)
-    fps    = {1: 10, 2: 8, 3: 8, 4: 8, 5: 8, 6: 4}
+    fps    = {1: 10, 2: 8, 3: 8, 4: 8, 5: 8, 6: 5, 7: 4}
     save_fn = make_html_animation if fmt == "html" else make_animation
     ext     = ".html" if fmt == "html" else ".gif"
 
